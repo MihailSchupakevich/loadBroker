@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -44,6 +45,19 @@ type jsonSensorDataRpro struct {
 	AdapterTypeId int     `json:"adapter_type_id"`
 }
 
+type Config struct {
+	ServerAddress     string   `json:"server_address"`
+	Port              int      `json:"port"`
+	Devices           []Device `json:"devices"`
+	Concurrency       int      `json:"concurrency"`
+	RequestsPerWorker int      `json:"requests_per_worker"`
+}
+
+type Device struct {
+	ControllerTypeId int `json:"controller_type_id"`
+	ControllerId     int `json:"controller_id"`
+}
+
 func main() {
 
 	file, errFile := os.ReadFile("config.json")
@@ -51,18 +65,20 @@ func main() {
 		return
 	}
 
+	var cfg *Config
+	if err := json.Unmarshal(file, &cfg); err != nil {
+		fmt.Println("Неверный формат JSON:", err)
+		return
+	}
+
 	client := http.Client{}
 
-	for i := range file {
-
+	request, errRequest := http.NewRequest("POST", fmt.Sprintf("http://%s:%s/anemon_hw_broker", cfg.ServerAddress, cfg.Port), body)
+	if errRequest != nil {
+		fmt.Println(errRequest)
 	}
 
-	request := http.Request{
-		Method: "POST",
-		Body:   file,
-	}
-
-	response, _ := client.Do(&request)
+	response, _ := client.Do(request)
 	defer response.Body.Close()
 
 }
