@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"time"
@@ -54,8 +57,8 @@ type Config struct {
 }
 
 type Device struct {
-	ControllerTypeId int `json:"controller_type_id"`
-	ControllerId     int `json:"controller_id"`
+	Id    int `json:"id"`
+	DevId int `json:"dev_id"`
 }
 
 func main() {
@@ -70,15 +73,75 @@ func main() {
 		fmt.Println("Неверный формат JSON:", err)
 		return
 	}
+	var sliceDevices []int
+
+	for _, dev := range cfg.Devices {
+		sliceDevices = append(sliceDevices, dev.DevId)
+	}
+	body := make([]dataStructuresRpro, len(sliceDevices))
+
+	for _, devId := range sliceDevices {
+		body = append(body, createPacket(devId))
+	}
+
+	bodyRequest, errBodyRequest := json.Marshal(body)
+	if errBodyRequest != nil {
+	}
 
 	client := http.Client{}
 
-	request, errRequest := http.NewRequest("POST", fmt.Sprintf("http://%s:%s/anemon_hw_broker", cfg.ServerAddress, cfg.Port), body)
+	request, errRequest := http.NewRequest("POST", fmt.Sprintf("http://%s:%d/anemon_hw_broker/input", cfg.ServerAddress, cfg.Port), bytes.NewBuffer(bodyRequest))
 	if errRequest != nil {
 		fmt.Println(errRequest)
 	}
+	request.Header.Set("Content-Type", "application/json")
 
-	response, _ := client.Do(request)
+	response, errDo := client.Do(request)
+	if errDo != nil {
+		fmt.Println(errDo)
+		return
+	}
 	defer response.Body.Close()
 
+	respText, _ := io.ReadAll(response.Body)
+	fmt.Printf("Статус: %s\nОтвет сервера: %s\n", response.Status, string(respText))
+
+}
+
+func randomFloat(min, max float64) float64 {
+	return min + rand.Float64()*(max-min)
+}
+
+func createPacket(devId int) dataStructuresRpro {
+	return dataStructuresRpro{
+		ControllerTypeId: 1, // Можно тоже сделать полем в config.json
+		ControllerId:     devId,
+		PacketTs:         time.Now().UnixMilli(),
+		InternalIp:       "192.168.1.50",
+		DevUptime:        time.Duration(rand.Intn(86400)) * time.Second,
+		ProtocolVersion:  1,
+		Data: sensorDataRpro{
+			DevSn:         1001,
+			OriginalDevId: devId,
+			RecTs:         time.Now().UnixMilli(),
+			Data: jsonSensorDataRpro{
+				DeltaV:        int8(rand.Intn(10) - 5), // От -5 до 4
+				FromLast:      int16(rand.Intn(500)),
+				Humidity:      randomFloat(40.0, 60.0), // Диапазон влажности
+				RssiLora:      int16(-rand.Intn(100)),  // Сигнал всегда отрицательный
+				Temperature:   randomFloat(20.0, 26.0), // Диапазон температуры
+				Voltage:       float32(randomFloat(3.3, 4.2)),
+				DiffPressure:  float32(randomFloat(0, 50)),
+				AtmPressure:   float32(randomFloat(990, 1030)),
+				DryContact1:   rand.Intn(2),
+				DryContact2:   rand.Intn(2),
+				DryContact:    rand.Intn(2),
+				AmbientLight:  float32(randomFloat(0, 1000)),
+				Co2Lvl:        float32(randomFloat(400, 1200)),
+				AdapterTypeId: 1,
+			},
+			IsSent: 0,
+			SentTs: 0,
+		},
+	}
 }
