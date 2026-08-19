@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -68,44 +69,31 @@ func main() {
 		return
 	}
 
-	var cfg *Config
+	var cfg Config
 	if err := json.Unmarshal(file, &cfg); err != nil {
 		fmt.Println("Неверный формат JSON:", err)
 		return
 	}
-	var sliceDevices []int
 
-	for _, dev := range cfg.Devices {
-		sliceDevices = append(sliceDevices, dev.DevId)
+	client := &http.Client{
+		Timeout: time.Second * 10,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 100,
+		},
 	}
-	body := make([]dataStructuresRpro, len(sliceDevices))
+	var wg sync.WaitGroup
+	totalRequests := cfg.RequestsPerWorker * cfg.Concurrency
+	fmt.Println(totalRequests)
 
-	for _, devId := range sliceDevices {
-		body = append(body, createPacket(devId))
+	for i := 0; i < totalRequests; i++ {
+		wg.Add(1)
+		go worker(i, client, &wg, cfg)
 	}
-
-	bodyRequest, errBodyRequest := json.Marshal(body)
-	if errBodyRequest != nil {
-	}
-
-	client := http.Client{}
-
-	request, errRequest := http.NewRequest("POST", fmt.Sprintf("http://%s:%d/anemon_hw_broker/input", cfg.ServerAddress, cfg.Port), bytes.NewBuffer(bodyRequest))
-	if errRequest != nil {
-		fmt.Println(errRequest)
-	}
-	request.Header.Set("Content-Type", "application/json")
-
-	response, errDo := client.Do(request)
-	if errDo != nil {
-		fmt.Println(errDo)
-		return
-	}
-	defer response.Body.Close()
-
-	respText, _ := io.ReadAll(response.Body)
-	fmt.Printf("Статус: %s\nОтвет сервера: %s\n", response.Status, string(respText))
-
+	wg.Wait()
+	duration := time.Since(time.Now()).Seconds()
+	rps := float64(totalRequests) / duration
+	fmt.Printf("\n--- Тест завершен ---\nВремя: %.2f сек\nСредний RPS: %.2f\n", duration, rps)
 }
 
 func randomFloat(min, max float64) float64 {
@@ -114,7 +102,7 @@ func randomFloat(min, max float64) float64 {
 
 func createPacket(devId int) dataStructuresRpro {
 	return dataStructuresRpro{
-		ControllerTypeId: 1, // Можно тоже сделать полем в config.json
+		ControllerTypeId: 1,
 		ControllerId:     devId,
 		PacketTs:         time.Now().UnixMilli(),
 		InternalIp:       "192.168.1.50",
@@ -144,4 +132,46 @@ func createPacket(devId int) dataStructuresRpro {
 			SentTs: 0,
 		},
 	}
+}
+func worker(id int, client *http.Client, wg *sync.WaitGroup, cfg Config) {
+
+	defer wg.Done()
+
+	var sliceDevices []int
+
+	for _, dev := range cfg.Devices {
+		sliceDevices = append(sliceDevices, dev.DevId)
+	}
+	body := make([]dataStructuresRpro, 0, len(sliceDevices))
+
+	for _, devId := range sliceDevices {
+		body = append(body, createPacket(devId))
+	}
+
+	bodyRequest, errBodyRequest := json.Marshal(body)
+	if errBodyRequest != nil {
+		fmt.Println(errBodyRequest)
+	}
+	bodyRequestMarshal := bytes.NewReader(bodyRequest)
+
+	req, errRequest := http.NewRequest("POST", fmt.Sprintf("http://%s:%d/anemon_hw_broker/input", cfg.ServerAddress, cfg.Port), bodyRequestMarshal)
+	if errRequest != nil {
+		fmt.Println(errRequest)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("MQTT", "data")
+	req.Header.Set("Controller-Type", "1")
+	//key := cnf.RcvId * salt
+	//req.Header.Set("X-API-key", fmt.Sprintf("%d", key))
+
+	response, errDo := client.Do(req)
+	if errDo != nil {
+		fmt.Println(errDo)
+		return
+	}
+	defer response.Body.Close()
+
+	respText, _ := io.ReadAll(response.Body)
+	fmt.Printf("Статус: %s\nОтвет сервера: %s\n", response.Status, string(respText))
+
 }
