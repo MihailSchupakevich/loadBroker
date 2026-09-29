@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -112,6 +113,7 @@ func worker(id int, cfg Config, device Device, client *http.Client, wg *sync.Wai
 		select {
 		case <-globalCtx.Done():
 			fmt.Printf("[Девайс %d] Останавливаюсь.\n", device.DevId)
+			log.Printf("[Девайс %d] Останавливаюсь.\n", device.DevId)
 			return
 		case <-ticker.C:
 			packet := createPacket(device.DevId)
@@ -145,6 +147,8 @@ func worker(id int, cfg Config, device Device, client *http.Client, wg *sync.Wai
 				sendCount++
 				fmt.Printf("[%s][D:%d W:%d] Пакет #%d отправлен. Код: %s\n",
 					time.Now().Format("15:04:05"), device.DevId, id, sendCount, resp.Status)
+				log.Printf("[%s][D:%d W:%d] Пакет #%d отправлен. Код: %s\n",
+					time.Now().Format("15:04:05"), device.DevId, id, sendCount, resp.Status)
 			}
 			cancel()
 		}
@@ -160,9 +164,17 @@ func main() {
 		return
 	}
 
+	logFile, errlogFile := os.OpenFile("testLog.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0755)
+	if errlogFile != nil {
+		fmt.Println(errlogFile)
+		return
+	}
+	log.SetOutput(logFile)
+
 	var cfg Config
 	if err := json.Unmarshal(file, &cfg); err != nil {
 		fmt.Println("Неверный формат JSON:", err)
+		log.Println("Неверный формат JSON:", err)
 		return
 	}
 
@@ -202,6 +214,8 @@ func main() {
 
 	fmt.Printf("Запуск симуляции: %d физических устройств.\nКаждое шлет данные раз в %d сек.\nОбщий тест: %d мин.\n",
 		len(cfg.Devices), cfg.IntervalSec, cfg.TestDurationM)
+	log.Printf("Запуск симуляции: %d физических устройств.\nКаждое шлет данные раз в %d сек.\nОбщий тест: %d мин.\n",
+		len(cfg.Devices), cfg.IntervalSec, cfg.TestDurationM)
 
 	// Главный цикл: запускаем по одной горутине НА КАЖДОЕ устройство из конфига
 	for i, dev := range cfg.Devices {
@@ -210,12 +224,13 @@ func main() {
 		go worker(i, cfg, dev, client, &wg, globalCtx)
 
 		// Небольшая задержка при старте, чтобы воркеры не выстрелили первым пакетом строго одновременно
-		time.Sleep(time.Duration(rand.Intn(2000)) * time.Millisecond)
+		time.Sleep(time.Duration(rand.Intn(150)) * time.Millisecond)
 	}
 
 	// Ждем либо окончания времени теста, либо сигнала прерывания (Ctrl+C)
 	<-globalCtx.Done()
 	fmt.Println("\nОсновное время вышло. Дожидаемся отправки последних пакетов...")
+	log.Println("\nОсновное время вышло. Дожидаемся отправки последних пакетов...")
 
 	// Даем секунду на завершение текущих Do-запросов
 	time.Sleep(1 * time.Second)
@@ -223,4 +238,6 @@ func main() {
 	wg.Wait()
 
 	fmt.Println("Тест успешно завершен.")
+	log.Println("Тест успешно завершен.")
+	defer logFile.Close()
 }
